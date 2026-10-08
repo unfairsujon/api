@@ -8,7 +8,7 @@ WORKDIR /app
 # that already have a fix published in trixie. CVEs without an upstream fix yet
 # (local-only TOCTOU, etc.) remain until the distro patches them and the image
 # is rebuilt; none are reachable from the proxy's request surface at runtime.
-RUN --mount=type=cache,id=default-s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-apt-cache,target=/var/cache/apt,sharing=locked 
+RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-apt-cache,target=/var/cache/apt,sharing=locked 
 apt-get update 
 && apt-get upgrade -y 
 && apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates 
