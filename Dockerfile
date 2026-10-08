@@ -8,11 +8,10 @@ WORKDIR /app
 # that already have a fix published in trixie. CVEs without an upstream fix yet
 # (local-only TOCTOU, etc.) remain until the distro patches them and the image
 # is rebuilt; none are reachable from the proxy's request surface at runtime.
-RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-apt-cache,target=/var/cache/apt,sharing=locked 
-apt-get update 
-&& apt-get upgrade -y 
-&& apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates 
-&& rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+  && apt-get upgrade -y \
+  && apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 # npm's *bundled* node_modules (brace-expansion, ip-address, tar, undici) are
 # npm's own internals — not application dependencies (the app resolves its own,
@@ -67,11 +66,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build tools for native module compilation
 # apt-get update needed here because base's rm -rf clears the shared cache
-RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-apt-cache,target=/var/cache/apt,sharing=locked 
-apt-get update 
-&& apt-get upgrade -y 
-&& apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates 
-&& rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+  && apt-get upgrade -y \
+  && apt-get install -y --no-install-recommends \
+     build-essential python3 python-is-python3 make g++ libsecret-1-0 ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 # Workspace package manifests MUST be present before `npm ci` so npm materializes
@@ -103,8 +102,7 @@ RUN test -f package-lock.json \
 # node-gyp comes from npm's own bundled copy (deterministic, already in the image)
 # instead of `npx --yes`, which would install an arbitrary registry version
 # on-demand and run its lifecycle scripts (Sonar docker:S6505).
-RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-npm-cache,target=/root/.npm \
-  npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
+RUN npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
   && (cd node_modules/better-sqlite3 \
       && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --force_build=1) \
   && test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node \
@@ -206,10 +204,23 @@ ARG OMNIROUTE_BUILD_WORKERS=2
 ENV CIRCLE_NODE_TOTAL=${OMNIROUTE_BUILD_WORKERS}
 
 COPY . ./
-RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-next-cache,target=/app/.build/next/cache 
-mkdir -p /app/data 
-&& npm run build 
-&& node --input-type=module -e "import { createRequire } from 'node:module'; import { pathToFileURL } from 'node:url'; globalThis.require = createRequire(pathToFileURL(import.meta.url));"
+RUN mkdir -p /app/data \
+  && npm run build \
+  && node --input-type=module -e "\
+import { createRequire } from 'node:module'; \
+import { pathToFileURL } from 'node:url'; \
+const standaloneRoot = '/app/.build/next/standalone/'; \
+const require = createRequire('/app/.build/next/standalone/package.json'); \
+for (const name of ['@atjsh/llmlingua-2', '@huggingface/transformers', 'js-tiktoken']) { \
+  const resolved = require.resolve(name); \
+  if (!resolved.startsWith(standaloneRoot)) throw new Error(name + ' resolved outside the standalone bundle: ' + resolved); \
+  await import(pathToFileURL(resolved).href); \
+} \
+const onnxRuntime = require.resolve('onnxruntime-node'); \
+if (!onnxRuntime.startsWith(standaloneRoot)) throw new Error('onnxruntime-node resolved outside the standalone bundle: ' + onnxRuntime); \
+await import(pathToFileURL(onnxRuntime).href); \
+console.log('standalone runtime verification: OK'); \
+"
 
 # ── Runner base ────────────────────────────────────────────────────────────
 FROM base AS runner-base
@@ -323,11 +334,10 @@ COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
 # browsers land under /home/node which persists across image layers and is
 # accessible to the non-root runtime user.
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
-RUN --mount=type=cache,id=s/53af0edd-ff50-43c3-872a-f0bf7e9c8b0d-apt-cache,target=/var/cache/apt,sharing=locked 
-apt-get update 
-&& node node_modules/playwright/cli.js install chromium --with-deps 
-&& chown -R node:node /home/node/.cache 
-&& rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+  && node node_modules/playwright/cli.js install chromium --with-deps \
+  && chown -R node:node /home/node/.cache \
+  && rm -rf /var/lib/apt/lists/*
 
 USER node
 
@@ -344,9 +354,7 @@ COPY --from=builder /app/node_modules/playwright-core ./node_modules/playwright-
 COPY --from=builder /app/node_modules/playwright ./node_modules/playwright
 
 # Install system dependencies required by openclaw (git+ssh references).
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
-  apt-get update \
+RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-compose \
   && rm -rf /var/lib/apt/lists/* \
   && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
@@ -359,8 +367,7 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
 #   2. `codex` / `claude-code` dev pre-releases (`@next`, dist-tags) mutate
 #      API surface without notice; reproducible builds need a SHA-pinned dev
 #      build, not the floating `@latest`.
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
-  npm install -g --no-audit --no-fund \
+RUN npm install -g --no-audit --no-fund \
     @openai/codex@0.159.2 \
     @anthropic-ai/claude-code@2.1.260 \
     droid@0.212.0 \
